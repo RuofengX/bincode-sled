@@ -1,10 +1,10 @@
 [package]
-name = "typed-sled"
+name = "bincode-sled"
 description = "Sled with types instead of bytes."
-version = "0.2.3"
-edition = "2018"
+version = "0.0.1"
+edition = "2021"
 license = "MIT"
-repository = "https://github.com/chronicl/typed-sled"
+# repository = "https://github.com/chronicl/typed-sled"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
