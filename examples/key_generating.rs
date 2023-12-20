@@ -1,4 +1,4 @@
-use typed_sled::key_generating::CounterTree;
+use bincode_sled::key_generating::CounterTree;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Creating a temporary sled database.

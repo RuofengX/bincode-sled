@@ -1,9 +1,9 @@
-use serde::{Deserialize, Serialize};
+use bincode::{Encode, Decode};
 use tantivy::{
     doc,
     schema::{Schema, TEXT},
 };
-use typed_sled::search::SearchEngine;
+use bincode_sled::search::SearchEngine;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Creating a temporary sled database.
@@ -11,7 +11,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db = sled::Config::new().temporary(true).open().unwrap();
 
     // The id is used by sled to identify which Tree in the database (db) to open
-    let tree = typed_sled::key_generating::CounterTree::open(&db, "unique_id");
+    let tree = bincode_sled::key_generating::CounterTree::open(&db, "unique_id");
 
     // Dummy blog post
     let post1 = BlogPost {
@@ -67,7 +67,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Encode, Decode, PartialEq)]
 struct BlogPost {
     author: String,
     title: String,

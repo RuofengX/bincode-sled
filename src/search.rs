@@ -50,7 +50,7 @@
 //! ```
 //!
 //! [tantivy]: https://docs.rs/tantivy/latest/tantivy/
-use crate::{serialize, Event, Tree, KV};
+use crate::{serialize, Event, Key, Tree, Value};
 
 use std::fs::create_dir_all;
 use std::iter::Iterator;
@@ -62,7 +62,7 @@ use tantivy::{
     collector::Collector,
     directory::MmapDirectory,
     query::{Query, QueryParser},
-    schema::{BytesOptions, Field, SchemaBuilder, Value},
+    schema::{BytesOptions, Field, SchemaBuilder},
     Document, Index, IndexReader, Score, Term,
 };
 
@@ -117,7 +117,11 @@ use tantivy::{
 /// }
 /// ```
 #[derive(Clone)]
-pub struct SearchEngine<K, V> {
+pub struct SearchEngine<K, V>
+where
+    K: Key,
+    V: Value,
+{
     tree: Tree<K, V>,
     pub index: Index,
     index_reader: IndexReader,
@@ -126,7 +130,11 @@ pub struct SearchEngine<K, V> {
     phantom_value: PhantomData<fn() -> V>,
 }
 
-impl<K, V> SearchEngine<K, V> {
+impl<K, V> SearchEngine<K, V> 
+where
+    K: Key,
+    V: Value,
+{
     /// Create a new search engine or if the path already exists
     /// open an existing search engine.
     pub fn new<P: AsRef<Path> + Clone, F>(
@@ -137,8 +145,8 @@ impl<K, V> SearchEngine<K, V> {
     ) -> Result<Self, SearchError>
     where
         F: Fn(&K, &V) -> Document + Send + Sync + 'static,
-        K: KV + 'static,
-        V: KV + 'static,
+        K: crate::Key + 'static,
+        V: crate::Value + 'static,
     {
         Self::new_with_options(Some(path), tree, schema_builder, f)
     }
@@ -151,8 +159,8 @@ impl<K, V> SearchEngine<K, V> {
     ) -> Result<Self, SearchError>
     where
         F: Fn(&K, &V) -> Document + Send + Sync + 'static,
-        K: KV + 'static,
-        V: KV + 'static,
+        K: crate::Key + 'static,
+        V: crate::Value + 'static,
     {
         Self::new_with_options::<&str, _>(None, tree, schema_builder, f)
     }
@@ -167,8 +175,8 @@ impl<K, V> SearchEngine<K, V> {
     ) -> Result<Self, SearchError>
     where
         F: Fn(&K, &V) -> Document + Send + Sync + 'static,
-        K: KV + 'static,
-        V: KV + 'static,
+        K: crate::Key + 'static,
+        V: crate::Value + 'static,
     {
         let key_field = schema_builder.add_bytes_field(
             "_typed_sled_key",
@@ -253,8 +261,8 @@ impl<K, V> SearchEngine<K, V> {
         limit: usize,
     ) -> Result<SearchResults<K, V>, SearchError>
     where
-        K: KV,
-        V: KV,
+        K: crate::Key,
+        V: crate::Value,
     {
         use tantivy::schema::Type;
         // Default types are only String like types
@@ -285,8 +293,8 @@ impl<K, V> SearchEngine<K, V> {
         limit: usize,
     ) -> Result<SearchResults<K, V>, SearchError>
     where
-        K: KV,
-        V: KV,
+        K: crate::Key,
+        V: crate::Value,
     {
         let searcher = self.index_reader.searcher();
         // println!(
@@ -301,7 +309,7 @@ impl<K, V> SearchEngine<K, V> {
         {
             let doc = searcher.doc(*doc_addr)?;
 
-            let key_bytes = if let Value::Bytes(bytes) = doc
+            let key_bytes = if let tantivy::schema::Value::Bytes(bytes) = doc
                 .get_first(self.key_field)
                 .ok_or(SearchError::DocDoesNotExist)?
             {
@@ -353,12 +361,12 @@ impl<K, V> SearchEngine<K, V> {
     /// a custom collector which yields `DocAdress`es.
     pub fn doc_address_to_kv(&self, doc_addr: DocAddress) -> Result<Option<(K, V)>, SearchError>
     where
-        K: KV,
-        V: KV,
+        K: crate::Key,
+        V: crate::Value,
     {
         let doc = self.index_reader.searcher().doc(doc_addr)?;
 
-        let key_bytes = if let Value::Bytes(bytes) = doc
+        let key_bytes = if let tantivy::schema::Value::Bytes(bytes) = doc
             .get_first(self.key_field)
             .ok_or(SearchError::DocDoesNotExist)?
         {
@@ -378,14 +386,14 @@ impl<K, V> SearchEngine<K, V> {
         doc_addrs: I,
     ) -> Result<Vec<Option<(K, V)>>, SearchError>
     where
-        K: KV,
-        V: KV,
+        K: crate::Key,
+        V: crate::Value,
     {
         let searcher = self.index_reader.searcher();
         let mut v = Vec::new();
         for doc_addr in doc_addrs {
             let doc = searcher.doc(doc_addr)?;
-            let key_bytes = if let Value::Bytes(bytes) = doc
+            let key_bytes = if let tantivy::schema::Value::Bytes(bytes) = doc
                 .get_first(self.key_field)
                 .ok_or(SearchError::DocDoesNotExist)?
             {

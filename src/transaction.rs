@@ -2,15 +2,16 @@ use std::marker::PhantomData;
 
 use sled::transaction::{ConflictableTransactionResult, TransactionResult};
 
-use crate::{deserialize, serialize, Batch, Tree, KV};
+use crate::{deserialize, serialize, Batch, Tree, Key, Value};
 
-pub struct TransactionalTree<'a, K, V> {
+pub struct TransactionalTree<'a, K, V> 
+where K: Key, V:Value{
     inner: &'a sled::transaction::TransactionalTree,
     _key: PhantomData<fn() -> K>,
     _value: PhantomData<fn() -> V>,
 }
 
-impl<'a, K, V> TransactionalTree<'a, K, V> {
+impl<'a, K:Key, V:Value> TransactionalTree<'a, K, V> {
     pub(crate) fn new(sled: &'a sled::transaction::TransactionalTree) -> Self {
         Self {
             inner: sled,
@@ -24,9 +25,6 @@ impl<'a, K, V> TransactionalTree<'a, K, V> {
         key: &K,
         value: &V,
     ) -> std::result::Result<Option<V>, sled::transaction::UnabortableTransactionError>
-    where
-        K: KV,
-        V: KV,
     {
         self.inner
             .insert(serialize(key), serialize(value))
@@ -37,9 +35,6 @@ impl<'a, K, V> TransactionalTree<'a, K, V> {
         &self,
         key: &K,
     ) -> std::result::Result<Option<V>, sled::transaction::UnabortableTransactionError>
-    where
-        K: KV,
-        V: KV,
     {
         self.inner
             .remove(serialize(key))
@@ -50,9 +45,6 @@ impl<'a, K, V> TransactionalTree<'a, K, V> {
         &self,
         key: &K,
     ) -> std::result::Result<Option<V>, sled::transaction::UnabortableTransactionError>
-    where
-        K: KV,
-        V: KV,
     {
         self.inner
             .get(serialize(key))
@@ -85,7 +77,7 @@ pub trait Transactional<E = ()> {
 
 macro_rules! impl_transactional {
   ($($k:ident, $v:ident, $i:tt),+) => {
-      impl<E, $($k, $v),+> Transactional<E> for ($(&Tree<$k, $v>),+) {
+      impl<E, $($k:Key, $v:Value),+> Transactional<E> for ($(&Tree<$k, $v>),+) {
           type View<'a> = (
               $(TransactionalTree<'a, $k, $v>),+
           );

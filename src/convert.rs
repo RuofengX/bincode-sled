@@ -19,7 +19,7 @@
 //!     Ok(())
 //! }
 //! ```
-use crate::{Tree, KV};
+use crate::{Tree, Key, Value};
 use std::convert::Into;
 
 /// Convert `Tree<KOld, VOld>` to `Tree<KNew, VNew>`
@@ -27,10 +27,10 @@ pub fn convert<KOld, VOld, KNew, VNew>(db: &sled::Db, tree: &str)
 where
     KOld: Into<KNew>,
     VOld: Into<VNew>,
-    KOld: KV,
-    VOld: KV,
-    KNew: KV,
-    VNew: KV,
+    KOld: Key,
+    VOld: Value,
+    KNew: Key,
+    VNew: Value,
 {
     let mut kvs = Vec::new();
 

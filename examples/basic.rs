@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use bincode::{Encode, Decode};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Creating a temporary sled database.
@@ -6,7 +6,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db = sled::Config::new().temporary(true).open().unwrap();
 
     // The id is used by sled to identify which Tree in the database (db) to open
-    let tree = typed_sled::Tree::<String, SomeValue>::open(&db, "unique_id");
+    let tree = bincode_sled::Tree::<String, SomeValue>::open(&db, "unique_id");
 
     tree.insert(&"some_key".to_owned(), &SomeValue(10))?;
 
@@ -14,5 +14,5 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Encode, Decode, PartialEq)]
 struct SomeValue(u32);

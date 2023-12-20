@@ -21,7 +21,7 @@
 //!     Ok(())
 //! }
 //! ```
-use crate::{Batch, Tree, KV};
+use crate::{Batch, Key, Tree, Value};
 use sled::transaction::{ConflictableTransactionResult, TransactionResult};
 use sled::Result;
 use std::ops::Deref;
@@ -29,16 +29,25 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 /// Wraps a type that implements KeyGenerating and uses it to
-/// generate the keys for a typed_sled::Tree.
+/// generate the keys for a bincode_sled::Tree.
 ///
 /// See CounterTree for a specific example of how to use this type.
 #[derive(Clone, Debug)]
-pub struct KeyGeneratingTree<KG: KeyGenerating<V>, V> {
+pub struct KeyGeneratingTree<KG: KeyGenerating<K, V>, K, V>
+where
+    K: Key,
+    V: Value,
+{
     key_generator: KG,
-    inner: Tree<KG::Key, V>,
+    inner: Tree<K, V>,
 }
 
-impl<KG: KeyGenerating<V>, V> KeyGeneratingTree<KG, V> {
+impl<KG: KeyGenerating<K, V>, K, V> KeyGeneratingTree<KG, K, V>
+where
+    KG: KeyGenerating<K, V>,
+    K: Key,
+    V: Value,
+{
     pub fn open<T: AsRef<str>>(db: &sled::Db, id: T) -> Self {
         let tree = Tree::open(db, id);
         let key_generator = KG::initialize(&tree);
@@ -50,11 +59,7 @@ impl<KG: KeyGenerating<V>, V> KeyGeneratingTree<KG, V> {
     }
 
     /// Insert a generated key to a new value, returning the key and the last value if it was set.
-    pub fn insert(&self, value: &V) -> Result<(KG::Key, Option<V>)>
-    where
-        KG::Key: KV,
-        V: KV,
-    {
+    pub fn insert(&self, value: &V) -> Result<(K, Option<V>)> {
         let key = self.key_generator.next_key();
         let res = self.inner.insert(&key, value);
         res.map(|opt_v| (key, opt_v))
@@ -65,26 +70,18 @@ impl<KG: KeyGenerating<V>, V> KeyGeneratingTree<KG, V> {
     /// by the key generator. If you need the generated key for construction of
     /// the value, you can first use `next_key` and then use this method with
     /// the generated key. Alternatively use `insert_fn`.
-    pub fn insert_with_key(&self, key: &KG::Key, value: &V) -> Result<Option<V>>
-    where
-        KG::Key: KV,
-        V: KV,
-    {
+    pub fn insert_with_key(&self, key: &K, value: &V) -> Result<Option<V>> {
         self.inner.insert(key, value)
     }
 
-    pub fn next_key(&self) -> KG::Key {
+    pub fn next_key(&self) -> K {
         self.key_generator.next_key()
     }
 
     /// Insert a generated key to a new dynamically created value, returning the key and the last value if it was set.
     /// The argument supplied to `f` is a reference to the key and the returned value is the value that will
     /// be inserted at the key.
-    pub fn insert_fn(&self, f: impl Fn(&KG::Key) -> V) -> Result<(KG::Key, Option<V>)>
-    where
-        KG::Key: KV,
-        V: KV,
-    {
+    pub fn insert_fn(&self, f: impl Fn(&K) -> V) -> Result<(K, Option<V>)> {
         let key = self.key_generator.next_key();
         let value = f(&key);
         let res = self.insert_with_key(&key, &value);
@@ -93,7 +90,7 @@ impl<KG: KeyGenerating<V>, V> KeyGeneratingTree<KG, V> {
 
     pub fn transaction<F, A, E>(&self, f: F) -> TransactionResult<A, E>
     where
-        F: Fn(&KeyGeneratingTransactionalTree<KG, V>) -> ConflictableTransactionResult<A, E>,
+        F: Fn(&KeyGeneratingTransactionalTree<KG, K, V>) -> ConflictableTransactionResult<A, E>,
     {
         self.inner.transaction(|transactional_tree| {
             f(&KeyGeneratingTransactionalTree {
@@ -107,20 +104,24 @@ impl<KG: KeyGenerating<V>, V> KeyGeneratingTree<KG, V> {
         &self.key_generator
     }
 
-    pub fn new_batch(&self) -> KeyGeneratingBatch<KG, V> {
+    pub fn new_batch(&self) -> KeyGeneratingBatch<KG, K, V> {
         KeyGeneratingBatch {
             key_generator: self.key_generator(),
             inner: Batch::default(),
         }
     }
 
-    pub fn apply_batch(&self, batch: KeyGeneratingBatch<KG, V>) -> Result<()> {
+    pub fn apply_batch(&self, batch: KeyGeneratingBatch<KG, K, V>) -> Result<()> {
         self.inner.apply_batch(batch.inner)
     }
 }
 
-impl<KG: KeyGenerating<V>, V> Deref for KeyGeneratingTree<KG, V> {
-    type Target = Tree<KG::Key, V>;
+impl<KG: KeyGenerating<K, V>, K, V> Deref for KeyGeneratingTree<KG, K, V>
+where
+    K: Key,
+    V: Value,
+{
+    type Target = Tree<K, V>;
 
     fn deref(&self) -> &Self::Target {
         &self.inner
@@ -131,47 +132,45 @@ impl<KG: KeyGenerating<V>, V> Deref for KeyGeneratingTree<KG, V> {
 /// for a typed_sled::Tree.
 ///
 /// See CounterTree for a specific example of how to use this trait.
-pub trait KeyGenerating<V> {
-    type Key;
+pub trait KeyGenerating<K, V>
+where
+    K: Key,
+    V: Value,
+{
+    fn initialize(tree: &Tree<K, V>) -> Self;
 
-    fn initialize(tree: &Tree<Self::Key, V>) -> Self;
-
-    fn next_key(&self) -> Self::Key;
+    fn next_key(&self) -> K;
 }
 
 #[derive(Clone, Debug)]
-pub struct KeyGeneratingBatch<'a, KG: KeyGenerating<V>, V> {
+pub struct KeyGeneratingBatch<'a, KG: KeyGenerating<K, V>, K, V>
+where
+    KG: KeyGenerating<K, V>,
+    K: Key,
+    V: Value,
+{
     key_generator: &'a KG,
-    inner: Batch<KG::Key, V>,
+    inner: Batch<K, V>,
 }
 
-impl<'a, KG: KeyGenerating<V, Key = K>, K, V> KeyGeneratingBatch<'a, KG, V> {
-    pub fn insert(&mut self, value: &V)
-    where
-        K: KV,
-        V: KV,
-    {
+impl<'a, KG: KeyGenerating<K, V>, K: Key, V: Value> KeyGeneratingBatch<'a, KG, K, V> {
+    pub fn insert(&mut self, value: &V) {
         self.inner.insert(&self.key_generator.next_key(), value);
     }
 
-    pub fn remove(&mut self, key: &K)
-    where
-        K: KV,
-    {
+    pub fn remove(&mut self, key: &K) {
         self.inner.remove(key)
     }
 }
 
 /// A typed_sled::Tree with automatically generated and continuously increasing u64 keys.
-pub type CounterTree<V> = KeyGeneratingTree<Counter, V>;
+pub type CounterTree<K, V> = KeyGeneratingTree<Counter, K, V>;
 
 #[derive(Debug, Clone)]
 pub struct Counter(Arc<AtomicU64>);
 
-impl<V: KV> KeyGenerating<V> for Counter {
-    type Key = u64;
-
-    fn initialize(tree: &Tree<Self::Key, V>) -> Self {
+impl<V: Value> KeyGenerating<u64, V> for Counter {
+    fn initialize(tree: &Tree<u64, V>) -> Self {
         if let Some((key, _)) = tree
             .last()
             .expect("KeyGenerating Counter failed to access sled Tree.")
@@ -182,38 +181,47 @@ impl<V: KV> KeyGenerating<V> for Counter {
         }
     }
 
-    fn next_key(&self) -> Self::Key {
+    fn next_key(&self) -> u64 {
         self.0.fetch_add(1, Ordering::Relaxed)
     }
 }
 
-pub struct KeyGeneratingTransactionalTree<'a, KG: KeyGenerating<V>, V> {
+pub struct KeyGeneratingTransactionalTree<'a, KG: KeyGenerating<K, V>, K, V>
+where
+    KG: KeyGenerating<K, V>,
+    K: Key,
+    V: Value,
+{
     key_generator: &'a KG,
-    inner: &'a crate::transaction::TransactionalTree<'a, KG::Key, V>,
+    inner: &'a crate::transaction::TransactionalTree<'a, K, V>,
 }
 
-impl<'a, KG: KeyGenerating<V>, V> KeyGeneratingTransactionalTree<'a, KG, V> {
+impl<'a, KG: KeyGenerating<K, V>, K, V> KeyGeneratingTransactionalTree<'a, KG, K, V>
+where
+    K: Key,
+    V: Value,
+{
     pub fn insert(
         &self,
         value: &V,
-    ) -> std::result::Result<Option<V>, sled::transaction::UnabortableTransactionError>
-    where
-        KG::Key: KV,
-        V: KV,
-    {
+    ) -> std::result::Result<Option<V>, sled::transaction::UnabortableTransactionError> {
         self.inner.insert(&self.key_generator.next_key(), value)
     }
 
     pub fn apply_batch(
         &self,
-        batch: &KeyGeneratingBatch<KG, V>,
+        batch: &KeyGeneratingBatch<KG, K, V>,
     ) -> std::result::Result<(), sled::transaction::UnabortableTransactionError> {
         self.inner.apply_batch(&batch.inner)
     }
 }
 
-impl<'a, KG: KeyGenerating<V>, V> Deref for KeyGeneratingTransactionalTree<'a, KG, V> {
-    type Target = crate::transaction::TransactionalTree<'a, KG::Key, V>;
+impl<'a, KG: KeyGenerating<K, V>, K, V> Deref for KeyGeneratingTransactionalTree<'a, KG, K, V>
+where
+    K: Key,
+    V: Value,
+{
+    type Target = crate::transaction::TransactionalTree<'a, K, V>;
 
     fn deref(&self) -> &Self::Target {
         self.inner

@@ -9,32 +9,11 @@
 //! * [search]: `SearchEngine` on top of a `Tree`.
 //! * [key_generating]: Create `Tree`s with automatically generated keys.
 //! * [convert]: Convert any `Tree` into another `Tree` with different key and value types.
-//! * [custom_serde]: Create `Tree`s with custom (de)serialization. This for example makes
-//!                   lazy or zero-copy (de)serialization possible.
 //!
-//! # Example
-//! ```
-//! use serde::{Deserialize, Serialize};
-//!
-//! #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-//! struct SomeValue(u32);
-//!
-//! fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     // Creating a temporary sled database.
-//!     // If you want to persist the data use sled::open instead.
-//!     let db = sled::Config::new().temporary(true).open().unwrap();
-//!
-//!     // The id is used by sled to identify which Tree in the database (db) to open
-//!     let tree = typed_sled::Tree::<String, SomeValue>::open(&db, "unique_id");
-//!
-//!     tree.insert(&"some_key".to_owned(), &SomeValue(10))?;
-//!
-//!     assert_eq!(tree.get(&"some_key".to_owned())?, Some(SomeValue(10)));
-//!     Ok(())
-//! }
-//! ```
 //! [sled]: https://docs.rs/sled/latest/sled/
 
+use bincode::config::{Fixint, LittleEndian, NoLimit};
+use bincode::{Decode, Encode};
 pub use sled::{open, Config};
 use transaction::TransactionalTree;
 
@@ -46,17 +25,21 @@ pub mod key_generating;
 pub mod search;
 pub mod transaction;
 
-pub mod custom_serde;
-
 use core::fmt;
 use core::iter::{DoubleEndedIterator, Iterator};
 use core::ops::{Bound, RangeBounds};
-use serde::Serialize;
 use sled::{
     transaction::{ConflictableTransactionResult, TransactionResult},
     IVec, Result,
 };
 use std::marker::PhantomData;
+
+const BIN_CONF: bincode::config::Configuration<LittleEndian, Fixint, NoLimit> =
+    bincode::config::standard()
+        .with_little_endian()
+        .with_fixed_int_encoding()
+        .with_no_limit();
+type BinConfT = bincode::config::Configuration<LittleEndian, Fixint, NoLimit>;
 
 // pub trait Bin = DeserializeOwned + Serialize + Clone + Send + Sync;
 
@@ -66,9 +49,9 @@ use std::marker::PhantomData;
 ///
 /// # Example
 /// ```
-/// use serde::{Deserialize, Serialize};
+/// use bincode::{Encode, Decode};
 ///
-/// #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// #[derive(Debug, Clone, Encode, Decode, PartialEq)]
 /// struct SomeValue(u32);
 ///
 /// fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -77,7 +60,7 @@ use std::marker::PhantomData;
 ///     let db = sled::Config::new().temporary(true).open().unwrap();
 ///
 ///     // The id is used by sled to identify which Tree in the database (db) to open.
-///     let tree = typed_sled::Tree::<String, SomeValue>::open(&db, "unique_id");
+///     let tree = bincode_sled::Tree::<String, SomeValue>::open(&db, "unique_id");
 ///
 ///     tree.insert(&"some_key".to_owned(), &SomeValue(10))?;
 ///
@@ -86,7 +69,11 @@ use std::marker::PhantomData;
 /// }
 /// ```
 #[derive(Debug)]
-pub struct Tree<K, V> {
+pub struct Tree<K, V>
+where
+    K: Key,
+    V: Value,
+{
     inner: sled::Tree,
     _key: PhantomData<fn() -> K>,
     _value: PhantomData<fn() -> V>,
@@ -94,7 +81,11 @@ pub struct Tree<K, V> {
 
 // Manual implementation to make ToOwned behave better.
 // With derive(Clone) to_owned() on a reference returns a reference.
-impl<K, V> Clone for Tree<K, V> {
+impl<K, V> Clone for Tree<K, V>
+where
+    K: Key,
+    V: Value,
+{
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
@@ -114,9 +105,12 @@ impl<K, V> Clone for Tree<K, V> {
 // for each `Tree` which might also make it possible.
 //
 // [specialization]: https://github.com/rust-lang/rust/issues/31844
-pub trait KV: serde::de::DeserializeOwned + Serialize {}
+pub trait Key: Encode + Decode + Send {}
 
-impl<T: serde::de::DeserializeOwned + Serialize> KV for T {}
+impl<T: Encode + Decode + Send + Sync> Key for T {}
+
+pub trait Value: Encode + Decode + Send {}
+impl<T: Encode + Decode + Send + Sync> Value for T {}
 
 /// Compare and swap error.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -137,14 +131,18 @@ impl<V> fmt::Display for CompareAndSwapError<V> {
 impl<V: std::fmt::Debug> std::error::Error for CompareAndSwapError<V> {}
 
 // These Trait bounds should probably be specified on the functions themselves, but too lazy.
-impl<K, V> Tree<K, V> {
+impl<K, V> Tree<K, V>
+where
+    K: Key,
+    V: Value,
+{
     /// Initialize a typed tree. The id identifies the tree to be opened from the db.
     /// # Example
     ///
     /// ```
-    /// use serde::{Deserialize, Serialize};
+    /// use bincode::{Encode, Decode};
     ///
-    /// #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+    /// #[derive(Debug, Clone, Encode, Decode, PartialEq)]
     /// struct SomeValue(u32);
     ///
     /// fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -153,7 +151,7 @@ impl<K, V> Tree<K, V> {
     ///     let db = sled::Config::new().temporary(true).open().unwrap();
     ///
     ///     // The id is used by sled to identify which Tree in the database (db) to open.
-    ///     let tree = typed_sled::Tree::<String, SomeValue>::open(&db, "unique_id");
+    ///     let tree = bincode_sled::Tree::<String, SomeValue>::open(&db, "unique_id");
     ///
     ///     tree.insert(&"some_key".to_owned(), &SomeValue(10))?;
     ///
@@ -170,11 +168,7 @@ impl<K, V> Tree<K, V> {
     }
 
     /// Insert a key to a new value, returning the last value if it was set.
-    pub fn insert(&self, key: &K, value: &V) -> Result<Option<V>>
-    where
-        K: KV,
-        V: KV,
-    {
+    pub fn insert(&self, key: &K, value: &V) -> Result<Option<V>> {
         self.inner
             .insert(serialize(key), serialize(value))
             .map(|opt| opt.map(|old_value| deserialize(&old_value)))
@@ -198,22 +192,14 @@ impl<K, V> Tree<K, V> {
     }
 
     /// Retrieve a value from the Tree if it exists.
-    pub fn get(&self, key: &K) -> Result<Option<V>>
-    where
-        K: KV,
-        V: KV,
-    {
+    pub fn get(&self, key: &K) -> Result<Option<V>> {
         self.inner
             .get(serialize(key))
             .map(|opt| opt.map(|v| deserialize(&v)))
     }
 
     /// Retrieve a value from the Tree if it exists. The key must be in serialized form.
-    pub fn get_from_raw<B: AsRef<[u8]>>(&self, key_bytes: B) -> Result<Option<V>>
-    where
-        K: KV,
-        V: KV,
-    {
+    pub fn get_from_raw<B: AsRef<[u8]>>(&self, key_bytes: B) -> Result<Option<V>> {
         self.inner
             .get(key_bytes.as_ref())
             .map(|opt| opt.map(|v| deserialize(&v)))
@@ -221,22 +207,14 @@ impl<K, V> Tree<K, V> {
 
     /// Deserialize a key and retrieve it's value from the Tree if it exists.
     /// The deserialization is only done if a value was retrieved successfully.
-    pub fn get_kv_from_raw<B: AsRef<[u8]>>(&self, key_bytes: B) -> Result<Option<(K, V)>>
-    where
-        K: KV,
-        V: KV,
-    {
+    pub fn get_kv_from_raw<B: AsRef<[u8]>>(&self, key_bytes: B) -> Result<Option<(K, V)>> {
         self.inner
             .get(key_bytes.as_ref())
             .map(|opt| opt.map(|v| (deserialize(key_bytes.as_ref()), deserialize(&v))))
     }
 
     /// Delete a value, returning the old value if it existed.
-    pub fn remove(&self, key: &K) -> Result<Option<V>>
-    where
-        K: KV,
-        V: KV,
-    {
+    pub fn remove(&self, key: &K) -> Result<Option<V>> {
         self.inner
             .remove(serialize(key))
             .map(|opt| opt.map(|v| deserialize(&v)))
@@ -252,11 +230,7 @@ impl<K, V> Tree<K, V> {
         key: &K,
         old: Option<&V>,
         new: Option<&V>,
-    ) -> Result<core::result::Result<(), CompareAndSwapError<V>>>
-    where
-        K: KV,
-        V: KV,
-    {
+    ) -> Result<core::result::Result<(), CompareAndSwapError<V>>> {
         self.inner
             .compare_and_swap(
                 serialize(key),
@@ -275,8 +249,6 @@ impl<K, V> Tree<K, V> {
     // not sure if implemented correctly (different trait bound for F)
     pub fn update_and_fetch<F>(&self, key: &K, mut f: F) -> Result<Option<V>>
     where
-        K: KV,
-        V: KV,
         F: FnMut(Option<V>) -> Option<V>,
     {
         self.inner
@@ -290,8 +262,6 @@ impl<K, V> Tree<K, V> {
     // not sure if implemented correctly (different trait bound for F)
     pub fn fetch_and_update<F>(&self, key: &K, mut f: F) -> Result<Option<V>>
     where
-        K: KV,
-        V: KV,
         F: FnMut(Option<V>) -> Option<V>,
     {
         self.inner
@@ -310,10 +280,7 @@ impl<K, V> Tree<K, V> {
     /// to block. There is a buffer of 1024 items per
     /// `Subscriber`. This can be used to build reactive
     /// and replicated systems.
-    pub fn watch_prefix(&self, prefix: &K) -> Subscriber<K, V>
-    where
-        K: KV,
-    {
+    pub fn watch_prefix(&self, prefix: &K) -> Subscriber<K, V> {
         Subscriber::from_sled(self.inner.watch_prefix(serialize(prefix)))
     }
 
@@ -325,10 +292,7 @@ impl<K, V> Tree<K, V> {
     /// to block. There is a buffer of 1024 items per
     /// `Subscriber`. This can be used to build reactive
     /// and replicated systems.
-    pub fn watch_all(&self) -> Subscriber<K, V>
-    where
-        K: KV,
-    {
+    pub fn watch_all(&self) -> Subscriber<K, V> {
         Subscriber::from_sled(self.inner.watch_prefix(vec![]))
     }
 
@@ -362,20 +326,13 @@ impl<K, V> Tree<K, V> {
 
     /// Returns `true` if the `Tree` contains a value for
     /// the specified key.
-    pub fn contains_key(&self, key: &K) -> Result<bool>
-    where
-        K: KV,
-    {
+    pub fn contains_key(&self, key: &K) -> Result<bool> {
         self.inner.contains_key(serialize(key))
     }
 
     /// Retrieve the key and value before the provided key,
     /// if one exists.
-    pub fn get_lt(&self, key: &K) -> Result<Option<(K, V)>>
-    where
-        K: KV,
-        V: KV,
-    {
+    pub fn get_lt(&self, key: &K) -> Result<Option<(K, V)>> {
         self.inner
             .get_lt(serialize(key))
             .map(|res| res.map(|(k, v)| (deserialize(&k), deserialize(&v))))
@@ -383,11 +340,7 @@ impl<K, V> Tree<K, V> {
 
     /// Retrieve the next key and value from the `Tree` after the
     /// provided key.
-    pub fn get_gt(&self, key: &K) -> Result<Option<(K, V)>>
-    where
-        K: KV,
-        V: KV,
-    {
+    pub fn get_gt(&self, key: &K) -> Result<Option<(K, V)>> {
         self.inner
             .get_gt(serialize(key))
             .map(|res| res.map(|(k, v)| (deserialize(&k), deserialize(&v))))
@@ -405,11 +358,7 @@ impl<K, V> Tree<K, V> {
     /// Merge operators are shared by all instances of a particular
     /// `Tree`. Different merge operators may be set on different
     /// `Tree`s.
-    pub fn merge(&self, key: &K, value: &V) -> Result<Option<V>>
-    where
-        K: KV,
-        V: KV,
-    {
+    pub fn merge(&self, key: &K, value: &V) -> Result<Option<V>> {
         self.inner
             .merge(serialize(key), serialize(value))
             .map(|res| res.map(|old_v| deserialize(&old_v)))
@@ -428,11 +377,7 @@ impl<K, V> Tree<K, V> {
     ///
     /// Calling `merge` will panic if no merge operator has been
     /// configured.
-    pub fn set_merge_operator(&self, merge_operator: impl MergeOperator<K, V> + 'static)
-    where
-        K: KV,
-        V: KV,
-    {
+    pub fn set_merge_operator(&self, merge_operator: impl MergeOperator<K, V> + 'static) {
         self.inner
             .set_merge_operator(move |key: &[u8], old_v: Option<&[u8]>, value: &[u8]| {
                 let opt_v = merge_operator(
@@ -452,10 +397,7 @@ impl<K, V> Tree<K, V> {
 
     /// Create a double-ended iterator over tuples of keys and values,
     /// where the keys fall within the specified range.
-    pub fn range<R: RangeBounds<K>>(&self, range: R) -> Iter<K, V>
-    where
-        K: KV + std::fmt::Debug,
-    {
+    pub fn range<R: RangeBounds<K>>(&self, range: R) -> Iter<K, V> {
         match (range.start_bound(), range.end_bound()) {
             (Bound::Unbounded, Bound::Unbounded) => {
                 Iter::from_sled(self.inner.range::<&[u8], _>(..))
@@ -490,20 +432,13 @@ impl<K, V> Tree<K, V> {
 
     /// Create an iterator over tuples of keys and values,
     /// where the all the keys starts with the given prefix.
-    pub fn scan_prefix(&self, prefix: &K) -> Iter<K, V>
-    where
-        K: KV,
-    {
+    pub fn scan_prefix(&self, prefix: &K) -> Iter<K, V> {
         Iter::from_sled(self.inner.scan_prefix(serialize(prefix)))
     }
 
     /// Returns the first key and value in the `Tree`, or
     /// `None` if the `Tree` is empty.
-    pub fn first(&self) -> Result<Option<(K, V)>>
-    where
-        K: KV,
-        V: KV,
-    {
+    pub fn first(&self) -> Result<Option<(K, V)>> {
         self.inner
             .first()
             .map(|res| res.map(|(k, v)| (deserialize(&k), deserialize(&v))))
@@ -511,33 +446,21 @@ impl<K, V> Tree<K, V> {
 
     /// Returns the last key and value in the `Tree`, or
     /// `None` if the `Tree` is empty.
-    pub fn last(&self) -> Result<Option<(K, V)>>
-    where
-        K: KV,
-        V: KV,
-    {
+    pub fn last(&self) -> Result<Option<(K, V)>> {
         self.inner
             .last()
             .map(|res| res.map(|(k, v)| (deserialize(&k), deserialize(&v))))
     }
 
     /// Atomically removes the maximum item in the `Tree` instance.
-    pub fn pop_max(&self) -> Result<Option<(K, V)>>
-    where
-        K: KV,
-        V: KV,
-    {
+    pub fn pop_max(&self) -> Result<Option<(K, V)>> {
         self.inner
             .pop_max()
             .map(|res| res.map(|(k, v)| (deserialize(&k), deserialize(&v))))
     }
 
     /// Atomically removes the minimum item in the `Tree` instance.
-    pub fn pop_min(&self) -> Result<Option<(K, V)>>
-    where
-        K: KV,
-        V: KV,
-    {
+    pub fn pop_min(&self) -> Result<Option<(K, V)>> {
         self.inner
             .pop_min()
             .map(|res| res.map(|(k, v)| (deserialize(&k), deserialize(&v))))
@@ -598,7 +521,7 @@ impl<K, V> Tree<K, V> {
 /// let db = sled::Config::new()
 ///   .temporary(true).open()?;
 ///
-/// let tree = typed_sled::Tree::<String, Vec<f32>>::open(&db, "unique_id");
+/// let tree = bincode_sled::Tree::<String, Vec<f32>>::open(&db, "unique_id");
 /// tree.set_merge_operator(concatenate_merge);
 ///
 /// let k = String::from("some_key");
@@ -620,9 +543,14 @@ impl<K, V> Tree<K, V> {
 /// assert_eq!(tree.get(&k)?, Some(vec![4.0]));
 /// # Ok(()) }
 /// ```
-pub trait MergeOperator<K, V>: Fn(K, Option<V>, V) -> Option<V> {}
+pub trait MergeOperator<K, V>: Fn(K, Option<V>, V) -> Option<V>
+where
+    K: Key,
+    V: Value,
+{
+}
 
-impl<K, V, F> MergeOperator<K, V> for F where F: Fn(K, Option<V>, V) -> Option<V> {}
+impl<K: Key, V: Value, F> MergeOperator<K, V> for F where F: Fn(K, Option<V>, V) -> Option<V> {}
 
 pub struct Iter<K, V> {
     inner: sled::Iter,
@@ -630,7 +558,7 @@ pub struct Iter<K, V> {
     _value: PhantomData<fn() -> V>,
 }
 
-impl<K: KV, V: KV> Iterator for Iter<K, V> {
+impl<K: Key, V: Value> Iterator for Iter<K, V> {
     type Item = Result<(K, V)>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -646,7 +574,7 @@ impl<K: KV, V: KV> Iterator for Iter<K, V> {
     }
 }
 
-impl<K: KV, V: KV> DoubleEndedIterator for Iter<K, V> {
+impl<K: Key, V: Value> DoubleEndedIterator for Iter<K, V> {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.inner
             .next_back()
@@ -654,7 +582,7 @@ impl<K: KV, V: KV> DoubleEndedIterator for Iter<K, V> {
     }
 }
 
-impl<K, V> Iter<K, V> {
+impl<K: Key, V: Value> Iter<K, V> {
     pub fn from_sled(iter: sled::Iter) -> Self {
         Iter {
             inner: iter,
@@ -663,50 +591,47 @@ impl<K, V> Iter<K, V> {
         }
     }
 
-    pub fn keys(self) -> impl DoubleEndedIterator<Item = Result<K>> + Send + Sync
-    where
-        K: KV + Send + Sync,
-        V: KV + Send + Sync,
-    {
+    pub fn keys(self) -> impl DoubleEndedIterator<Item = Result<K>> + Send + Sync {
         self.map(|r| r.map(|(k, _v)| k))
     }
 
     /// Iterate over the values of this Tree
-    pub fn values(self) -> impl DoubleEndedIterator<Item = Result<V>> + Send + Sync
-    where
-        K: KV + Send + Sync,
-        V: KV + Send + Sync,
-    {
+    pub fn values(self) -> impl DoubleEndedIterator<Item = Result<V>> + Send + Sync {
         self.map(|r| r.map(|(_k, v)| v))
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct Batch<K, V> {
+pub struct Batch<K, V>
+where
+    K: Key,
+    V: Value,
+{
     inner: sled::Batch,
     _key: PhantomData<fn() -> K>,
     _value: PhantomData<fn() -> V>,
 }
 
-impl<K, V> Batch<K, V> {
-    pub fn insert(&mut self, key: &K, value: &V)
-    where
-        K: KV,
-        V: KV,
-    {
+impl<K, V> Batch<K, V>
+where
+    K: Key,
+    V: Value,
+{
+    pub fn insert(&mut self, key: &K, value: &V) {
         self.inner.insert(serialize(key), serialize(value));
     }
 
-    pub fn remove(&mut self, key: &K)
-    where
-        K: KV,
-    {
+    pub fn remove(&mut self, key: &K) {
         self.inner.remove(serialize(key))
     }
 }
 
 // Implementing Default manually to not require K and V to implement Default.
-impl<K, V> Default for Batch<K, V> {
+impl<K, V> Default for Batch<K, V>
+where
+    K: Key,
+    V: Value,
+{
     fn default() -> Self {
         Self {
             inner: Default::default(),
@@ -718,22 +643,26 @@ impl<K, V> Default for Batch<K, V> {
 
 use pin_project::pin_project;
 #[pin_project]
-pub struct Subscriber<K, V> {
+pub struct Subscriber<K, V>
+where
+    K: Key,
+    V: Value,
+{
     #[pin]
     inner: sled::Subscriber,
     _key: PhantomData<fn() -> K>,
     _value: PhantomData<fn() -> V>,
 }
 
-impl<K, V> Subscriber<K, V> {
+impl<K, V> Subscriber<K, V>
+where
+    K: Key,
+    V: Value,
+{
     pub fn next_timeout(
         &mut self,
         timeout: core::time::Duration,
-    ) -> core::result::Result<Event<K, V>, std::sync::mpsc::RecvTimeoutError>
-    where
-        K: KV,
-        V: KV,
-    {
+    ) -> core::result::Result<Event<K, V>, std::sync::mpsc::RecvTimeoutError> {
         self.inner
             .next_timeout(timeout)
             .map(|e| Event::from_sled(&e))
@@ -751,7 +680,7 @@ impl<K, V> Subscriber<K, V> {
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
-impl<K: KV + Unpin, V: KV + Unpin> Future for Subscriber<K, V> {
+impl<K: Key + Unpin, V: Value + Unpin> Future for Subscriber<K, V> {
     type Output = Option<Event<K, V>>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -762,7 +691,11 @@ impl<K: KV + Unpin, V: KV + Unpin> Future for Subscriber<K, V> {
     }
 }
 
-impl<K: KV, V: KV> Iterator for Subscriber<K, V> {
+impl<K, V> Iterator for Subscriber<K, V>
+where
+    K: Key,
+    V: Value,
+{
     type Item = Event<K, V>;
 
     fn next(&mut self) -> Option<Event<K, V>> {
@@ -770,26 +703,27 @@ impl<K: KV, V: KV> Iterator for Subscriber<K, V> {
     }
 }
 
-pub enum Event<K, V> {
+pub enum Event<K, V>
+where
+    K: Key,
+    V: Value,
+{
     Insert { key: K, value: V },
     Remove { key: K },
 }
 
-impl<K, V> Event<K, V> {
-    pub fn key(&self) -> &K
-    where
-        K: KV,
-    {
+impl<K, V> Event<K, V>
+where
+    K: Key,
+    V: Value,
+{
+    pub fn key(&self) -> &K {
         match self {
             Self::Insert { key, .. } | Self::Remove { key } => key,
         }
     }
 
-    pub fn from_sled(event: &sled::Event) -> Self
-    where
-        K: KV,
-        V: KV,
-    {
+    pub fn from_sled(event: &sled::Event) -> Self {
         match event {
             sled::Event::Insert { key, value } => Self::Insert {
                 key: deserialize(key),
@@ -803,19 +737,21 @@ impl<K, V> Event<K, V> {
 }
 
 /// The function which is used to deserialize all keys and values.
-pub fn deserialize<'a, T>(bytes: &'a [u8]) -> T
+pub fn deserialize<T>(bytes: &[u8]) -> T
 where
-    T: serde::de::Deserialize<'a>,
+    T: Decode,
 {
-    bincode::deserialize(bytes).expect("deserialization failed, did the type serialized change?")
+    bincode::decode_from_slice::<T, BinConfT>(bytes, BIN_CONF)
+        .expect("Decode failed, did the type encoded change?")
+        .0
 }
 
 /// The function which is used to serialize all keys and values.
 pub fn serialize<T>(value: &T) -> Vec<u8>
 where
-    T: serde::Serialize,
+    T: Encode,
 {
-    bincode::serialize(value).expect("serialization failed, did the type serialized change?")
+    bincode::encode_to_vec(value, BIN_CONF).expect("Encode failed.")
 }
 
 #[cfg(test)]

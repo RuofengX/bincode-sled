@@ -1,12 +1,15 @@
-use serde::{Deserialize, Serialize};
-use std::ops::Bound;
+use bincode::{Decode, Encode};
+use bincode_sled::search::SearchEngine;
+use std::{
+    ops::Bound,
+    time::{SystemTime, UNIX_EPOCH},
+};
 use tantivy::{
     doc,
     query::{BooleanQuery, Occur, QueryParser, RangeQuery},
     schema::{Schema, Type, TEXT},
     DateOptions, Term,
 };
-use typed_sled::search::SearchEngine;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Creating a temporary sled database.
@@ -14,11 +17,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db = sled::Config::new().temporary(true).open().unwrap();
 
     // The id is used by sled to identify which Tree in the database (db) to open
-    let tree = typed_sled::key_generating::CounterTree::open(&db, "unique_id");
+    let tree = bincode_sled::key_generating::CounterTree::open(&db, "unique_id");
 
     // Dummy blog post
     let post1 = BlogPost {
-        date: chrono::Utc::now(),
+        date: SystemTime::now(),
         title: "The life of the disillusioned".to_string(),
         body: "Long story short, he didn't have fun.".to_string(),
     };
@@ -50,7 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::thread::sleep(std::time::Duration::from_secs(1));
 
     let post2 = BlogPost {
-        date: chrono::Utc::now(),
+        date: std::time::SystemTime::now(),
         title: "Living a happy life".to_string(),
         body: "Live health and stress free.".to_string(),
     };
@@ -104,13 +107,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn tantivy_datetime(date: chrono::DateTime<chrono::Utc>) -> tantivy::DateTime {
-    tantivy::DateTime::from_timestamp_millis(date.timestamp_millis())
+fn tantivy_datetime(date: SystemTime) -> tantivy::DateTime {
+    // tantivy::DateTime::from_timestamp_millis(date.timestamp_millis())
+    tantivy::DateTime::from_timestamp_secs(date.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Encode, Decode, PartialEq)]
 struct BlogPost {
-    date: chrono::DateTime<chrono::Utc>,
+    // date: chrono::DateTime<chrono::Utc>,
+    // HACK: the example used in typed_sled
+    // cannot derive Both encode and decode onto chrono::DataTime
+    date: SystemTime,
     title: String,
     body: String,
 }
