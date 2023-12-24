@@ -34,7 +34,7 @@ use sled::{
 };
 use std::marker::PhantomData;
 
-const BIN_CONF: bincode::config::Configuration<LittleEndian, Fixint, NoLimit> =
+pub const DEFAULT_CONF: bincode::config::Configuration<LittleEndian, Fixint, NoLimit> =
     bincode::config::standard()
         .with_little_endian()
         .with_fixed_int_encoding()
@@ -741,7 +741,7 @@ pub fn deserialize<T>(bytes: &[u8]) -> T
 where
     T: Decode,
 {
-    bincode::decode_from_slice::<T, BinConfT>(bytes, BIN_CONF)
+    bincode::decode_from_slice::<T, BinConfT>(bytes, DEFAULT_CONF)
         .expect("Decode failed, did the type encoded change?")
         .0
 }
@@ -751,7 +751,7 @@ pub fn serialize<T>(value: &T) -> Vec<u8>
 where
     T: Encode,
 {
-    bincode::encode_to_vec(value, BIN_CONF).expect("Encode failed.")
+    bincode::encode_to_vec(value, DEFAULT_CONF).expect("Encode failed.")
 }
 
 #[cfg(test)]
