@@ -1,7 +1,7 @@
 [package]
 name = "bincode-sled"
 description = "Sled with types instead of bytes. Powered by bincode-v2"
-version = "0.0.2"
+version = "0.0.3"
 edition = "2021"
 license = "MIT"
 # repository = "https://github.com/chronicl/typed-sled"
