@@ -9,12 +9,12 @@ license = "MIT"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-sled = "0.34"
-bincode = {version = "2.0.0-rc"}
+sled = { version = "1.0.0-alpha.120" }
+bincode = { version = "2.0.0-rc" }
 pin-project = "1"
 thiserror = "1"
-tantivy = {version = "0.19", optional = true}
-chrono = {version = "0.4", features = ["serde"], optional = true}
+tantivy = { version = "0.19", optional = true }
+chrono = { version = "0.4", features = ["serde"], optional = true }
 
 [[example]]
 name = "key_generating"
